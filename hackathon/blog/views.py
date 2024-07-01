@@ -1,3 +1,4 @@
+from django.core.paginator import Paginator, PageNotAnInteger, EmptyPage
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -5,7 +6,7 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
-
+from django.db.models import Q
 from .models import Tag, Post, Comment, Profile, Bookmark,Token
 from .serializers import TagSerializer, PostSerializer, CommentSerializer, ProfileSerializer, BookmarkSerializer
 
@@ -63,9 +64,45 @@ class TagDetail(APIView):
 
 class PostList(APIView):
     def get(self, request):
-        posts = Post.objects.all()
+        search_term = request.GET.get('SearchTerm', '')
+        per_pages = int(request.GET.get('PerPages', 3))
+        page_number = int(request.GET.get('PageNum', 1))
+        is_mine = request.GET.get('isMine', 'false') == 'true'
+        user_uid = request.GET.get('UserUid', None)
+        user = request.user if request.user.is_authenticated else None
+
+        post_list = Post.objects.all()
+
+        if search_term:
+            post_list = post_list.filter(Q(title__icontains=search_term) | Q(content__icontains=search_term))
+        #특정 사용자 필터링
+        if user_uid:
+            post_list = post_list.filter(user__uid=user_uid)
+        elif is_mine and user:
+            post_list = post_list.filter(author=user)
+        paginator = Paginator(post_list, per_pages)
+
+        try:
+            posts = paginator.page(page_number)
+        except PageNotAnInteger:
+            posts = paginator.page(1)
+        except EmptyPage:
+            posts = paginator.page(paginator.num_pages)
+
         serializer = PostSerializer(posts, many=True)
-        return Response(serializer.data)
+
+        #북마크 여부
+        serialized_data = serializer.data
+        if user:
+            for post_data in serialized_data:
+                post_id = post_data['id']
+                post_data['is_bookmarked'] = False
+
+        #총 페이지수
+        return Response({
+            'posts' : serialized_data,
+            'pages' : paginator.num_pages
+        })
 
     def post(self, request):
         serializer = PostSerializer(data=request.data)
